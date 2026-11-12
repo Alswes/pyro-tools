@@ -1,0 +1,137 @@
+rules_version = '2';
+// ============================================================
+// Pyro Tools · regras de segurança do banco (Firestore)
+// Quem decide o que cada setor lê e grava é ESTE arquivo, no servidor.
+//
+// O administrador escolhe as páginas de cada setor em
+// Configurações > Páginas por setor. O Pyro grava em config/acesso
+// a lista de coleções que cada setor pode LER e GRAVAR, e estas regras
+// conferem essa lista a cada leitura ou gravação.
+// Só o administrador consegue alterar config/acesso e os usuários.
+//
+// O administrador é reconhecido pelo e-mail abaixo (o mesmo de firebase-config.js).
+// ============================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function logado()    { return request.auth != null; }
+    function isAdmin()   { return logado() && request.auth.token.email == 'admin@exemplo.com'; }
+    function perfilRef() { return /databases/$(database)/documents/usuarios/$(request.auth.uid); }
+    function cfgRef()    { return /databases/$(database)/documents/config/acesso; }
+    function ativo()     { return logado() && exists(perfilRef()) && get(perfilRef()).data.ativo == true && exists(cfgRef()); }
+    function setor()     { return get(perfilRef()).data.setor; }
+    function pode(tipo, col) {
+      return isAdmin() || (ativo() && setor() in get(cfgRef()).data[tipo] && col in get(cfgRef()).data[tipo][setor()]);
+    }
+
+    // usuários: cada um lê o próprio cadastro; só o administrador cria e altera
+    match /usuarios/{uid} {
+      allow read:  if isAdmin() || (logado() && request.auth.uid == uid);
+      allow write: if isAdmin();
+    }
+
+    // páginas por setor: todos os usuários logados leem; só o administrador altera
+    match /config/{id} {
+      allow read:  if logado();
+      allow write: if isAdmin();
+    }
+
+    // obras liberadas: Compras e o administrador veem todas; os demais setores,
+    // só as obras que o administrador liberou (config/acesso: obrasLib e obrasLibNomes)
+    function restrito()  { return !isAdmin() && setor() != 'compras'; }
+    function libIds()    { return get(cfgRef()).data.obrasLib; }
+    function libNomes()  { return get(cfgRef()).data.obrasLibNomes; }
+    // (o "||" para no primeiro "verdadeiro": para Compras e administrador o campo nem é lido)
+    function obraLer()   { return !restrito() || resource.data.obraId in libIds(); }
+    function obraGravar(){ return !restrito() || request.resource.data.obraId in libIds(); }
+    function itemLer()   { return !restrito() || resource.data.obra in libNomes(); }
+    function itemGravar(){ return !restrito() || request.resource.data.obra in libNomes(); }
+    function nomeLer()   { return !restrito() || resource.data.nome in libNomes(); }
+    function nomeGravar(){ return !restrito() || request.resource.data.nome in libNomes(); }
+
+    // cancelar pedido de compra (v0.15): só quem está na lista "cancela" de config/acesso
+    // (quem edita Home, Obras ou Pedidos e Recebimento) muda o status para ou de "cancelado",
+    // e o motivo (mínimo 5 letras) é obrigatório enquanto o pedido estiver cancelado.
+    function podeCancelar() { return isAdmin() || (ativo() && setor() in get(cfgRef()).data.get('cancela', [])); }
+    function motivoOk()     { return request.resource.data.get('status', '') != 'cancelado'
+                                || (request.resource.data.get('motivoCancelamento', '') is string
+                                    && request.resource.data.get('motivoCancelamento', '').size() >= 5); }
+    function cancCriarOk(col)  { return col != 'pedidos' || ((request.resource.data.get('status', '') != 'cancelado' || podeCancelar()) && motivoOk()); }
+    function cancMudarOk(col)  { return col != 'pedidos' || (((request.resource.data.get('status', '') == 'cancelado') == (resource.data.get('status', '') == 'cancelado') || podeCancelar()) && motivoOk()); }
+
+    // pedidos, entregas, notas, pendências e ocorrências: pela obra (campo obraId)
+    // painel_meta, anexos e o Roteiro de entregas (rot_*): conforme as páginas liberadas para o setor
+    match /{col}/{id} {
+      allow read:   if (col in ['pedidos','entregas','nfs','pendencias','ocorrencias'] && pode('ler', col) && obraLer())
+                    || (col in ['painel_meta','anexos','anexos_partes','rot_entregas','rot_coletas','rot_config','cotacoes'] && pode('ler', col));
+      allow create: if ((col in ['pedidos','entregas','nfs','pendencias','ocorrencias'] && pode('gravar', col) && obraGravar())
+                    || (col in ['painel_meta','anexos','anexos_partes','rot_entregas','rot_coletas','rot_config','cotacoes'] && pode('gravar', col)))
+                    && cancCriarOk(col);
+      allow update: if ((col in ['pedidos','entregas','nfs','pendencias','ocorrencias'] && pode('gravar', col) && obraGravar())
+                    || (col in ['painel_meta','anexos','anexos_partes','rot_entregas','rot_coletas','rot_config','cotacoes'] && pode('gravar', col)))
+                    && cancMudarOk(col);
+      allow delete: if (col in ['pedidos','entregas','nfs','pendencias','ocorrencias'] && pode('gravar', col) && obraLer())
+                    || (col in ['painel_meta','anexos','anexos_partes','rot_entregas','rot_coletas','rot_config','cotacoes'] && pode('gravar', col));
+    }
+    // Recebimento: itens pela obra (campo obra) e lista de obras pelo nome
+    match /painel_pedidos/{id} {
+      allow read:           if pode('ler', 'painel_pedidos') && itemLer();
+      allow create, update: if pode('gravar', 'painel_pedidos') && itemGravar();
+      allow delete:         if pode('gravar', 'painel_pedidos') && itemLer();
+    }
+    match /painel_obras/{id} {
+      allow read:           if pode('ler', 'painel_obras') && nomeLer();
+      allow create, update: if pode('gravar', 'painel_obras') && nomeGravar();
+      allow delete:         if pode('gravar', 'painel_obras') && nomeLer();
+    }
+    // histórico de importações mistura obras: só Compras e o administrador
+    match /painel_importacoes/{id} {
+      allow read:  if pode('ler', 'painel_importacoes') && !restrito();
+      allow write: if pode('gravar', 'painel_importacoes') && !restrito();
+    }
+    // cadastros: leitura conforme as páginas (obras: só as liberadas); alteração só do administrador
+    match /obras/{id}         { allow read: if pode('ler', 'obras') && (!restrito() || id in libIds()); allow write: if isAdmin(); }
+    match /fornecedores/{id}  { allow read: if pode('ler', 'fornecedores');  allow write: if isAdmin(); }
+    match /colaboradores/{id} { allow read: if pode('ler', 'colaboradores'); allow write: if isAdmin(); }
+
+    // pedidos do ERP (planilha importada): leitura conforme as páginas (Compras consulta); só o administrador importa e anota
+    match /erp_pedidos/{id} { allow read: if pode('ler', 'erp_pedidos'); allow write: if isAdmin(); }
+
+    // nome e setor gravados precisam ser os do cadastro (ninguém se passa por outra pessoa)
+    function meuNome()  { return get(perfilRef()).data.get('nome', ''); }
+    function souEu(d)   { return isAdmin() || (d.setor == setor() && (d.nome == meuNome() || d.nome == request.auth.token.email)); }
+
+    // auditoria: cada usuário só grava registros em nome dele; só o administrador lê; ninguém altera nem apaga
+    match /auditoria/{id} {
+      allow create: if logado() && (isAdmin() || ativo()) && request.resource.data.uid == request.auth.uid && souEu(request.resource.data);
+      allow read:   if isAdmin();
+      allow update, delete: if false;
+    }
+    // quem está online: todos os usuários ativos leem; cada um grava só o próprio
+    match /presenca/{uid} {
+      allow read:  if isAdmin() || ativo();
+      allow write: if logado() && request.auth.uid == uid && souEu(request.resource.data);
+    }
+    // chat: sala Geral para todos os ativos; mensagem direta só para quem mandou e quem recebeu
+    match /chat/{id} {
+      allow read:   if logado() && ((resource.data.para == 'geral' && (isAdmin() || ativo())) || resource.data.para == request.auth.uid || resource.data.de == request.auth.uid);
+      allow create: if logado() && (isAdmin() || ativo()) && request.resource.data.de == request.auth.uid && souEu(request.resource.data)
+                    && request.resource.data.texto is string && request.resource.data.texto.size() <= 2000
+                    && (request.resource.data.texto.size() > 0 || request.resource.data.anexo is map);
+      allow update: if false;
+      allow delete: if isAdmin() || (logado() && resource.data.de == request.auth.uid);
+    }
+
+    // arquivos do chat (em partes de até ~500 KB): mesmas regras da mensagem
+    match /chat_arq/{id} {
+      allow read:   if logado() && ((resource.data.para == 'geral' && (isAdmin() || ativo())) || resource.data.para == request.auth.uid || resource.data.de == request.auth.uid);
+      allow create: if logado() && (isAdmin() || ativo()) && request.resource.data.de == request.auth.uid
+                    && request.resource.data.dados is string && request.resource.data.dados.size() <= 750000;
+      allow update: if false;
+      allow delete: if isAdmin() || (logado() && resource.data.de == request.auth.uid);
+    }
+
+    // papéis do Pyro antigo (não usados aqui): só o administrador
+    match /acessos/{id} { allow read, write: if isAdmin(); }
+  }
+}

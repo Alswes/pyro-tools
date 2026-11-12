@@ -1,0 +1,17 @@
+{
+  "name": "Pyro Tools · Follow-up de Compras",
+  "short_name": "Pyro",
+  "description": "Follow-up de compras, recebimento e entregas",
+  "lang": "pt-BR",
+  "start_url": "/?app=1",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1E1B18",
+  "theme_color": "#E8590C",
+  "icons": [
+    { "src": "icons/pyro-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/pyro-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/pyro-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,0 +1,22 @@
+# Firebase
+.firebase/
+firebase-debug.log
+*-debug.log
+
+# Chaves e segredos: nunca vão para o repositório
+*service-account*.json
+*serviceAccount*.json
+.env
+.env.*
+
+# Backups e exportações de dados reais
+*backup*.json
+roteiro-do-claude.json
+*.xlsx
+*.csv
+
+# Sistema e editor
+node_modules/
+.DS_Store
+Thumbs.db
+.vscode/
