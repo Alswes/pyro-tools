@@ -192,5 +192,5 @@ O projeto usa versionamento semântico. O histórico completo está no [CHANGELO
 
 ---
 
-Desenvolvido por **Wesley Lemos** · Wallety_IT
+Desenvolvido por **Wesley Lemos** · 
 [LinkedIn](https://www.linkedin.com/in/wesley-lemos-profissional) · [GitHub](https://github.com/Alswes)
